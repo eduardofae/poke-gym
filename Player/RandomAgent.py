@@ -2,11 +2,11 @@ from Trainer.Tabular.Abstract.Agent import *
 import numpy as np
 
 
-class HumanAgent(Agent):
+class RandomAgent(Agent):
 
-    def __init__(self, n_actions, menu=''):
+    def __init__(self, n_actions):
         self.n_actions = n_actions
-        self.menu = menu
+        self.pi = [1/self.n_actions] * self.n_actions
 
     def check_state(self, s):
         pass
@@ -20,4 +20,4 @@ class HumanAgent(Agent):
         :param s: state
         :return: action
         """
-        return int(input(self.menu + ': ')) - 1
+        return np.random.choice(self.n_actions, p=self.pi)
