@@ -1,5 +1,7 @@
 # Simplified Pokemon Environment
 
+(New repository: https://gitlab.com/DracoStriker/pokemon-vgc-engine)
+
 Please cite if used.
 
     @INPROCEEDINGS{9096092,
