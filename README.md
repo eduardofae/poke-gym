@@ -1,6 +1,6 @@
 # Simplified Pokemon Environment
 
-(New repository: https://gitlab.com/DracoStriker/pokemon-vgc-engine)
+Paper Link: https://ieeexplore.ieee.org/document/9096092
 
 Please cite if used.
 
