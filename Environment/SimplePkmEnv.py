@@ -1,5 +1,5 @@
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 import random
 import numpy as np
 from copy import deepcopy
@@ -85,7 +85,7 @@ class SimpleMove:
         else:
             self.type = move_type
         if move_power is None:
-            self.power = random.randrange(POWER_MIN, POWER_MAX) * 1.
+            self.power = random.randrange(int(POWER_MIN), int(POWER_MAX)) * 1.
         else:
             self.power = move_power
         # STAB

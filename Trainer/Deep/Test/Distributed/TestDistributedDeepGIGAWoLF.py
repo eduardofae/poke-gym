@@ -13,7 +13,7 @@ MIN_E_RATE = [0.5, 0.1, 0.01]
 N_PLAYERS = 2
 DECAY_PERCENTAGE = 0.65
 ENV_NAME = 'SimplePkmEnv(SETTING_HALF_DETERMINISTIC)'
-MODEL_PATH = '../../../../Model/Deep/DistributedDeepGIGAWoLF' + '_' + ENV_NAME
+MODEL_PATH = r"D:\git\test_clones\poke-gym\Model\Deep\DistributedDeepGIGAWoLF" #'../../../../Model/Deep/DistributedDeepGIGAWoLF'# + '_' + ENV_NAME
 
 
 def main():

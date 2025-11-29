@@ -3,9 +3,10 @@ from threading import Thread
 import numpy as np
 import copy
 import tensorflow as tf
-import tensorflow.contrib.slim as slim
+import tf_slim as slim
 from random import random
 
+tf.compat.v1.disable_v2_behavior()
 
 class DistributedDeepGIGAWoLF:
     class Trainer:
@@ -122,7 +123,7 @@ class DistributedDeepGIGAWoLF:
             self.name = name
             self.global_episodes = global_episodes
             p = 0
-            with tf.variable_scope(self.name):
+            with tf.compat.v1.variable_scope(self.name):
                 self.increment = global_episodes.assign_add(1)
             while p < n_players:
                 self.player.append(
@@ -189,14 +190,14 @@ class DistributedDeepGIGAWoLF:
     @staticmethod
     def train(env, g_l_rate, concurrent_games, pi_l_rate, y, tau, n_eps, n_steps, e_rate, n_players, model_path,
               decay_percentage, min_e_rate, hosts, task_index):
-        tf.logging.set_verbosity(tf.logging.ERROR)
+        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
         cluster = tf.train.ClusterSpec({"dqn": hosts})
-        server = tf.train.Server(cluster, job_name="dqn", task_index=task_index)
-        tf.reset_default_graph()
+        server = tf.distribute.Server(cluster, job_name="dqn", task_index=task_index)
+        tf.compat.v1.reset_default_graph()
         with tf.device(
-                tf.train.replica_device_setter(worker_device="/job:worker/task:%d" % task_index, cluster=cluster)):
-            global_episodes = tf.train.get_or_create_global_step()
-            optimizer = tf.train.AdamOptimizer(learning_rate=g_l_rate)
+                tf.compat.v1.train.replica_device_setter(worker_device="/job:worker/task:%d" % task_index, cluster=cluster)):
+            global_episodes = tf.compat.v1.train.get_or_create_global_step()
+            optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=g_l_rate)
             g_net = []
             p = 0
             while p < n_players:
@@ -215,10 +216,11 @@ class DistributedDeepGIGAWoLF:
                                                        min_e_rate, name=str(g)))
                 g += 1
         # tf.summary.FileWriter('./Graph', sess.graph)
-        hooks = [tf.train.StopAtStepHook(last_step=50000000)]
+        hooks = [tf.compat.v1.train.StopAtStepHook(last_step=50000000)]
         print('MonitoredTrainingSession', task_index)
-        with tf.train.MonitoredTrainingSession(master=server.target, is_chief=(task_index == 0),
-                                               config=tf.ConfigProto(), save_summaries_steps=100,
+
+        with tf.compat.v1.train.MonitoredTrainingSession(master=server.target, is_chief=(task_index == 0),
+                                               config=tf.compat.v1.ConfigProto(), save_summaries_steps=100,
                                                save_summaries_secs=None, save_checkpoint_secs=600,
                                                checkpoint_dir=model_path, hooks=hooks) as sess:
             print('run', task_index)
@@ -227,42 +229,43 @@ class DistributedDeepGIGAWoLF:
 
     class Network:
         def __init__(self, optimizer, env, name='default', global_id=0):
-            with tf.variable_scope(name):
-                self.in_state = tf.placeholder(tf.float32, shape=(None, env.observation_space.n), name=name + '_input')
+            with tf.compat.v1.variable_scope(name):
+                tf.compat.v1.disable_eager_execution()
+                self.in_state = tf.compat.v1.placeholder(tf.float32, shape=(None, env.observation_space.n), name=name + '_input')
                 self.hidden_l = slim.fully_connected(self.in_state, 150,
-                                                     weights_initializer=tf.contrib.layers.xavier_initializer(),
+                                                     weights_initializer=tf.compat.v1.keras.initializers.VarianceScaling(scale=1.0, mode="fan_avg", distribution="uniform"),
                                                      activation_fn=tf.nn.elu)
                 self.hidden_l = slim.fully_connected(self.in_state, 150,
-                                                     weights_initializer=tf.contrib.layers.xavier_initializer(),
+                                                     weights_initializer=tf.compat.v1.keras.initializers.VarianceScaling(scale=1.0, mode="fan_avg", distribution="uniform"),
                                                      activation_fn=tf.nn.elu)
                 self.hidden_l = slim.fully_connected(self.in_state, 150,
-                                                     weights_initializer=tf.contrib.layers.xavier_initializer(),
+                                                     weights_initializer=tf.compat.v1.keras.initializers.VarianceScaling(scale=1.0, mode="fan_avg", distribution="uniform"),
                                                      activation_fn=tf.nn.elu)
-                self.out_q = slim.fully_connected(self.hidden_l, env.action_space.n, activation_fn=None,
-                                                  weights_initializer=tf.contrib.layers.xavier_initializer(),
+                self.out_q = slim.fully_connected(self.hidden_l, int(env.action_space.n), activation_fn=None,
+                                                  weights_initializer=tf.compat.v1.keras.initializers.VarianceScaling(scale=1.0, mode="fan_avg", distribution="uniform"),
                                                   biases_initializer=None)
-                self.out_pi = slim.fully_connected(self.hidden_l, env.action_space.n, activation_fn=None,
-                                                   weights_initializer=tf.contrib.layers.xavier_initializer(),
+                self.out_pi = slim.fully_connected(self.hidden_l, int(env.action_space.n), activation_fn=None,
+                                                   weights_initializer=tf.compat.v1.keras.initializers.VarianceScaling(scale=1.0, mode="fan_avg", distribution="uniform"),
                                                    biases_initializer=None)
-                self.out_pi_slow = slim.fully_connected(self.hidden_l, env.action_space.n, activation_fn=None,
-                                                        weights_initializer=tf.contrib.layers.xavier_initializer(),
+                self.out_pi_slow = slim.fully_connected(self.hidden_l, int(env.action_space.n), activation_fn=None,
+                                                        weights_initializer=tf.compat.v1.keras.initializers.VarianceScaling(scale=1.0, mode="fan_avg", distribution="uniform"),
                                                         biases_initializer=None)
                 self.max_q = tf.reduce_max(self.out_q, 1)
                 self.policy = tf.nn.softmax(self.out_pi, name=name + '_policy')
                 self.policy_slow = tf.nn.softmax(self.out_pi_slow)
-            self.target_q = tf.placeholder(tf.float32, shape=(None, env.action_space.n))
+            self.target_q = tf.compat.v1.placeholder(tf.float32, shape=(None, env.action_space.n))
             self.loss_q = tf.square(self.target_q - self.out_q)
-            self.target_pi = tf.placeholder(tf.float32, shape=(None, env.action_space.n))
-            self.target_pi_slow = tf.placeholder(tf.float32, shape=(None, env.action_space.n))
+            self.target_pi = tf.compat.v1.placeholder(tf.float32, shape=(None, env.action_space.n))
+            self.target_pi_slow = tf.compat.v1.placeholder(tf.float32, shape=(None, env.action_space.n))
             self.loss_pi = tf.reduce_mean(
-                tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.out_pi, labels=self.target_pi))
+                tf.nn.softmax_cross_entropy_with_logits(logits=self.out_pi, labels=self.target_pi))
             self.loss_pi_slow = tf.reduce_mean(
-                tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.out_pi_slow, labels=self.target_pi_slow))
+                tf.nn.softmax_cross_entropy_with_logits(logits=self.out_pi_slow, labels=self.target_pi_slow))
             self.loss = tf.reduce_mean(self.loss_q + self.loss_pi + self.loss_pi_slow)
             self.gradients, _ = tf.clip_by_global_norm(
-                tf.gradients(self.loss, tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, name)), 40.0)
+                tf.gradients(self.loss, tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, name)), 40.0)
             self.apply_gradients = optimizer.apply_gradients(
-                zip(self.gradients, tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global_' + str(global_id))))
+                zip(self.gradients, tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, 'global_' + str(global_id))))
 
             def copy_network(origin_scope, destiny_scope):
                 origin_w = slim.get_trainable_variables(origin_scope)
