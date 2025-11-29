@@ -3,7 +3,9 @@ from threading import Thread
 import numpy as np
 import copy
 import tensorflow as tf
-import tensorflow.contrib.slim as slim
+tf.compat.v1.disable_eager_execution()
+# import tensorflow.contrib.slim as slim
+import tf_slim as slim
 from random import random
 
 
@@ -11,7 +13,7 @@ class DistributedDeepWPL:
     class Trainer:
 
         def __init__(self, env, optimizer, g_net, t_net, e_rate, pi_l_rate, y, leader, name='player',
-                     global_id=0):
+                     global_id=0, min_e_rate=0.001):
             self.name = name
             self.g_net = g_net
             self.t_net = t_net
@@ -28,6 +30,7 @@ class DistributedDeepWPL:
             self.s_batch = []
             self.sess = None
             self.leader = leader
+            self.min_e_rate = float(min_e_rate)
 
         def set_session(self, sess):
             self.sess = sess
@@ -42,7 +45,7 @@ class DistributedDeepWPL:
                 return int(random() * self.n_actions)
             pi, q = self.sess.run([self.net.policy, self.net.out_q], feed_dict={self.net.in_state: [s]})
             pi, self.q_t = pi[0], q[0]
-            print(' PI ', pi, 'Q', self.q_t)
+            # print(' PI ', pi, 'Q', self.q_t)
             return np.random.choice(self.n_actions, p=pi)
 
         def compute_pi_q(self, s, a, r, t):
@@ -71,7 +74,7 @@ class DistributedDeepWPL:
                 self.pi_t[_a] += self.pi_l_rate * delta * delta_policy
             # project policy back into valid policy space
             self.pi_t = projection(self.pi_t, self.min_e_rate)
-            print(' target PI ', self.pi_t, ' <- ', pi_t[0])
+            # print(' target PI ', self.pi_t, ' <- ', pi_t[0])
             self.pi_t_batch += [self.pi_t]
 
         def accumulate_grads_on_global(self):
@@ -110,12 +113,12 @@ class DistributedDeepWPL:
             self.name = name
             self.global_episodes = global_episodes
             p = 0
-            with tf.variable_scope(self.name):
+            with tf.compat.v1.variable_scope(self.name):
                 self.increment = global_episodes.assign_add(1)
             while p < n_players:
                 self.player.append(
                     DistributedDeepWPL.Trainer(env, optimizer, g_net[p]['global'], g_net[p]['target'], e_rate,
-                                               pi_l_rate, y, g_id == 0, name=self.name + '_' + str(p), global_id=p))
+                                               pi_l_rate, y, g_id == 0, name=self.name + '_' + str(p), global_id=p, min_e_rate=min_e_rate[p % len(min_e_rate)]))
                 p += 1
             self.n_eps = n_eps
             self.n_steps = n_steps
@@ -163,7 +166,8 @@ class DistributedDeepWPL:
                                     p.update_target_network()
                         if self.name == '0':
                             self.sess.run(self.increment)
-                        print('STEP', self.sess.run(self.global_episodes))
+                        if self.sess.run(self.global_episodes) % 1000 == 0:
+                            print('STEP', self.sess.run(self.global_episodes))
                         if self.sess.run(self.global_episodes) == self.n_eps * self.n_steps:
                             return
                         if step % self.n_steps == 0:
@@ -175,14 +179,14 @@ class DistributedDeepWPL:
     @staticmethod
     def train(env, g_l_rate, concurrent_games, pi_l_rate, y, tau, n_eps, n_steps, e_rate, n_players, model_path,
               decay_percentage, min_e_rate, hosts, task_index):
-        tf.logging.set_verbosity(tf.logging.ERROR)
-        cluster = tf.train.ClusterSpec({"dqn": hosts})
-        server = tf.train.Server(cluster, job_name="dqn", task_index=task_index)
-        tf.reset_default_graph()
+        tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+        cluster = tf.compat.v1.train.ClusterSpec({"dqn": hosts})
+        server = tf.compat.v1.train.Server(cluster, job_name="dqn", task_index=task_index)
+        tf.compat.v1.reset_default_graph()
         with tf.device(
-                tf.train.replica_device_setter(worker_device="/job:worker/task:%d" % task_index, cluster=cluster)):
-            global_episodes = tf.train.get_or_create_global_step()
-            optimizer = tf.train.AdamOptimizer(learning_rate=g_l_rate)
+                tf.compat.v1.train.replica_device_setter(worker_device="/job:dqn/task:%d" % task_index, cluster=cluster)):
+            global_episodes = tf.compat.v1.train.get_or_create_global_step()
+            optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=g_l_rate)
             g_net = []
             p = 0
             while p < n_players:
@@ -201,10 +205,10 @@ class DistributedDeepWPL:
                                                   min_e_rate, name=str(g)))
                 g += 1
         # tf.summary.FileWriter('./Graph', sess.graph)
-        hooks = [tf.train.StopAtStepHook(last_step=50000000)]
+        hooks = [tf.compat.v1.train.StopAtStepHook(last_step=50000000)]
         print('MonitoredTrainingSession', task_index)
-        with tf.train.MonitoredTrainingSession(master=server.target, is_chief=(task_index == 0),
-                                               config=tf.ConfigProto(), save_summaries_steps=100,
+        with tf.compat.v1.train.MonitoredTrainingSession(master=server.target, is_chief=(task_index == 0),
+                                               config=tf.compat.v1.ConfigProto(), save_summaries_steps=100,
                                                save_summaries_secs=None, save_checkpoint_secs=600,
                                                checkpoint_dir=model_path, hooks=hooks) as sess:
             print('run', task_index)
@@ -213,29 +217,29 @@ class DistributedDeepWPL:
 
     class Network:
         def __init__(self, optimizer, env, name='default', global_id=0):
-            with tf.variable_scope(name):
-                self.in_state = tf.placeholder(tf.float32, shape=(None, env.observation_space.n), name=name + '_input')
+            with tf.compat.v1.variable_scope(name):
+                self.in_state = tf.compat.v1.placeholder(tf.float32, shape=(None, env.observation_space.n), name=name + '_input')
                 self.hidden_l = slim.fully_connected(self.in_state, 9,
-                                                     weights_initializer=tf.contrib.layers.xavier_initializer(),
+                                                     weights_initializer=tf.compat.v1.keras.initializers.VarianceScaling(),
                                                      activation_fn=tf.nn.elu)
-                self.out_q = slim.fully_connected(self.hidden_l, env.action_space.n, activation_fn=None,
-                                                  weights_initializer=tf.contrib.layers.xavier_initializer(),
+                self.out_q = slim.fully_connected(self.hidden_l, int(env.action_space.n), activation_fn=None,
+                                                  weights_initializer=tf.compat.v1.keras.initializers.VarianceScaling(),
                                                   biases_initializer=None)
-                self.out_pi = slim.fully_connected(self.hidden_l, env.action_space.n, activation_fn=None,
-                                                   weights_initializer=tf.contrib.layers.xavier_initializer(),
+                self.out_pi = slim.fully_connected(self.hidden_l, int(env.action_space.n), activation_fn=None,
+                                                   weights_initializer=tf.compat.v1.keras.initializers.VarianceScaling(),
                                                    biases_initializer=None)
                 self.max_q = tf.reduce_max(self.out_q, 1)
                 self.policy = tf.nn.softmax(self.out_pi, name=name + '_policy')
-            self.target_q = tf.placeholder(tf.float32, shape=(None, env.action_space.n))
+            self.target_q = tf.compat.v1.placeholder(tf.float32, shape=(None, env.action_space.n))
             self.loss_q = tf.square(self.target_q - self.out_q)
-            self.target_pi = tf.placeholder(tf.float32, shape=(None, env.action_space.n))
+            self.target_pi = tf.compat.v1.placeholder(tf.float32, shape=(None, env.action_space.n))
             self.loss_pi = tf.reduce_mean(
-                tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.out_pi, labels=self.target_pi))
+                tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(logits=self.out_pi, labels=self.target_pi))
             self.loss = tf.reduce_mean(self.loss_q + self.loss_pi)
             self.gradients, _ = tf.clip_by_global_norm(
-                tf.gradients(self.loss, tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, name)), 40.0)
+                tf.gradients(self.loss, tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, name)), 40.0)
             self.apply_gradients = optimizer.apply_gradients(
-                zip(self.gradients, tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global_' + str(global_id))))
+                zip(self.gradients, tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, 'global_' + str(global_id))))
 
             def copy_network(origin_scope, destiny_scope):
                 origin_w = slim.get_trainable_variables(origin_scope)
