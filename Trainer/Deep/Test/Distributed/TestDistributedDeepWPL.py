@@ -14,8 +14,8 @@ N_PLAYERS = 2
 DECAY_PERCENTAGE = 0.65
 ENV_NAME = 'SimplePkmEnv(SETTING_HALF_DETERMINISTIC)'
 # MODEL_PATH = '../../../../Model/Deep/DistributedDeepWPL' + '_' + ENV_NAME
-MODEL_PATH = r'C:\Users\barbu\VSCode-projects\poke-gym\Model\Deep\DistributedDeepWPL'
-
+# MODEL_PATH = r'C:\Users\barbu\VSCode-projects\poke-gym\Model\Deep\DistributedDeepWPL'
+MODEL_PATH = '.\\Model\\Deep\\DistributedDeepWPL'
 
 def main():
     task_index = int(sys.argv[1])
