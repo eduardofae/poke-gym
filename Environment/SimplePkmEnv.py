@@ -1,10 +1,9 @@
 import gymnasium as gym
 from gymnasium import spaces
-import random
 import numpy as np
-from copy import deepcopy
 
 # type codification
+NONE = -1
 NORMAL = 0
 FIRE = 1
 WATER = 2
@@ -24,11 +23,11 @@ DARK = 15
 STEEL = 16
 FAIRY = 17
 
-TYPE_TO_STR = {NORMAL: "NORMAL", FIRE: "FIRE", WATER: "WATER", ELECTRIC: "ELECTRIC", GRASS: "GRASS", ICE: "ICE",
+TYPE_TO_STR = {NONE: "NONE", NORMAL: "NORMAL", FIRE: "FIRE", WATER: "WATER", ELECTRIC: "ELECTRIC", GRASS: "GRASS", ICE: "ICE",
                FIGHT: "FIGHT", POISON: "POISON", GROUND: "GROUND", FLYING: "FLYING", PSYCHIC: "PSYCHIC", BUG: "BUG",
                ROCK: "ROCK", GHOST: "GHOST", DRAGON: "DRAGON", DARK: "DARK", STEEL: "STEEL", FAIRY: "FAIRY"}
-TYPE_LIST = [NORMAL, FIRE, WATER, ELECTRIC, GRASS, ICE, FIGHT, POISON, GROUND, FLYING, PSYCHIC, BUG, ROCK, GHOST,
-             DRAGON, DARK, STEEL, FAIRY]
+TYPE_LIST = np.array([NONE, NORMAL, FIRE, WATER, ELECTRIC, GRASS, ICE, FIGHT, POISON, GROUND, FLYING, PSYCHIC, BUG, ROCK, GHOST,
+             DRAGON, DARK, STEEL, FAIRY])
 N_TYPES = len(TYPE_LIST)
 
 # type chart
@@ -50,12 +49,12 @@ TYPE_CHART_MULTIPLIER = [
     [1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 2., 1., .5, .0],  # DRAGON
     [1., 1., 1., 1., 1., 1., .5, 1., 1., 1., 2., 1., 1., 2., 1., .5, 1., .5],  # DARK
     [1., .5, .5, .5, 1., 2., 1., 1., 1., 1., 1., 1., 2., 1., 1., 1., .5, 2.],  # STEEL
-    [1., .5, 1., 1., 1., 1., 2., .5, 1., 1., 1., 1., 1., 1., 2., 2., .5, 1.]  # FAIRY
+    [1., .5, 1., 1., 1., 1., 2., .5, 1., 1., 1., 1., 1., 1., 2., 2., .5, 1.]   # FAIRY
 ]
 
 # move power range
-POWER_MIN = 50.
-POWER_MAX = 100.
+POWER_MIN = 50
+POWER_MAX = 100
 
 # number moves
 N_MOVES = 4
@@ -70,31 +69,25 @@ SETTING_FULL_DETERMINISTIC = 1
 SETTING_HALF_DETERMINISTIC = 2
 SETTING_FAIR_IN_ADVANTAGE = 3
 
-
 class SimpleMove:
     def __init__(self, move_type=None, move_power=None, my_type=None):
-        if move_type is None:
-            if my_type is None:
-                self.type = random.randrange(0, N_TYPES)
-            else:
-                self.type = random.randrange(0, N_TYPES)
+        if move_type is None or move_type is NONE:
+            self.type = get_random_type(NONE)
+            if my_type is not None:
                 # Don't pick attacks that are super effective against self or that self is super effective against
-                while (TYPE_CHART_MULTIPLIER[self.type][my_type] > 1 or
-                       TYPE_CHART_MULTIPLIER[my_type][self.type] > 1):
-                    self.type = random.randrange(0, N_TYPES)
+                while (calc_type_multiplier(self.type, my_type) > 1 or
+                       calc_type_multiplier(my_type[0], self.type) > 1 or
+                       calc_type_multiplier(my_type[1], self.type) > 1):
+                    self.type = get_random_type(NONE)
         else:
             self.type = move_type
         if move_power is None:
-            self.power = random.randrange(int(POWER_MIN), int(POWER_MAX)) * 1.
+            self.power = np.random.randint(POWER_MIN, POWER_MAX)
         else:
             self.power = move_power
-        # STAB
-        if my_type == move_type:
-            move_power *= 1.5
 
     def __str__(self):
         return "Move(" + TYPE_TO_STR[self.type] + ", " + str(self.power) + ")"
-
 
 class SimplePkm:
     def __init__(self, p_type=None, hp=HIT_POINTS,
@@ -102,18 +95,21 @@ class SimplePkm:
                  type2=None, type2power=None, type3=None, type3power=None):
         self.hp = hp
         if p_type is None:
-            self.p_type = random.randrange(0, N_TYPES)
+            self.p_type = get_random_type_combo()
             self.moves = [SimpleMove(my_type=self.p_type) for i in range(N_MOVES - 1)] + [
-                SimpleMove(move_type=self.p_type)]
+                SimpleMove(move_type=self.p_type[0])]
         else:
-            self.p_type = p_type
+            if isinstance(p_type, tuple):
+                self.p_type = p_type
+            else:
+                self.p_type = (p_type, NONE)
             self.moves = [SimpleMove(move_type=type0, move_power=type0power),
                           SimpleMove(move_type=type1, move_power=type1power),
                           SimpleMove(move_type=type2, move_power=type2power),
                           SimpleMove(move_type=type3, move_power=type3power)]
 
     def __str__(self):
-        return 'Pokemon(' + TYPE_TO_STR[self.p_type] + ', HP ' + str(self.hp) + ', ' + str(self.moves[0]) + ', ' + str(
+        return 'Pokemon(' + TYPE_TO_STR[self.p_type[0]] + '/' + TYPE_TO_STR[self.p_type[1]] + ', HP ' + str(self.hp) + ', ' + str(self.moves[0]) + ', ' + str(
             self.moves[1]) + ', ' + str(self.moves[2]) + ', ' + str(self.moves[3]) + ')'
 
 
@@ -185,18 +181,18 @@ class SimplePkmEnv(gym.Env):
                           SimplePkm(NORMAL, HIT_POINTS, NORMAL, 90, NORMAL, 90, NORMAL, 90, NORMAL,
                                     90)]  # party pokemons
         elif self.setting == SETTING_HALF_DETERMINISTIC:
-            if random.uniform(0, 1) <= 0.2:
-                type1 = random.randrange(0, N_TYPES - 1)
-                type2 = get_super_effective_move(type1)
-                self.a_pkm = [SimplePkm(type1, HIT_POINTS, type1, 90, type2, 90, type1, 90, type2, 90),
-                              SimplePkm(type2, HIT_POINTS, type2, 90, type2, 90, type2, 90, type2,
+            if np.random.uniform(0, 1) <= 0.2:
+                type1 = get_random_type_combo()
+                type2 = get_random_type_combo(type1)
+                self.a_pkm = [SimplePkm(type1, HIT_POINTS, type1[0], 90, type2[0], 90, type1[1], 90, type2[1], 90),
+                              SimplePkm(type2, HIT_POINTS, type2[0], 90, type2[0], 90, type2[1], 90, type2[1],
                                         90)]  # active pokemons
             else:
                 self.a_pkm = [SimplePkm(), SimplePkm()]  # active pokemons
             self.p_pkm = [SimplePkm(), SimplePkm()]  # party pokemons
         elif self.setting == SETTING_FAIR_IN_ADVANTAGE:
-            type1 = random.randrange(0, N_TYPES - 1)
-            type2 = get_super_effective_move(type1)
+            type1 = get_random_type_combo()
+            type2 = get_random_type_combo(type1)
             self.a_pkm = [
                 SimplePkm(type1, get_non_very_effective_move(type2), 90, get_non_very_effective_move(type2), 90,
                           get_normal_effective_move(type2), 90, type1, 90),
@@ -242,13 +238,17 @@ class SimplePkmEnv(gym.Env):
         self.setting = setting
 
     def _state_trainer(self, t_id):
-        return [self.a_pkm[t_id].p_type, self.a_pkm[t_id].hp,
-                self.p_pkm[t_id].p_type, self.p_pkm[t_id].hp,
-                self.a_pkm[not t_id].p_type, self.a_pkm[not t_id].hp,
+        return [self.a_pkm[t_id].p_type,
+                self.a_pkm[t_id].hp,
+                self.p_pkm[t_id].p_type,
+                self.p_pkm[t_id].hp,
+                self.a_pkm[not t_id].p_type,
+                self.a_pkm[not t_id].hp,
                 self.a_pkm[t_id].moves[0].type, self.a_pkm[t_id].moves[0].power,
                 self.a_pkm[t_id].moves[1].type, self.a_pkm[t_id].moves[1].power,
                 self.a_pkm[t_id].moves[2].type, self.a_pkm[t_id].moves[2].power,
                 self.a_pkm[t_id].moves[3].type, self.a_pkm[t_id].moves[3].power,
+                self.p_pkm[not t_id].p_type,
                 self.p_pkm[not t_id].hp]
 
     def _switch_pkm(self, t_id):
@@ -265,20 +265,19 @@ class SimplePkmEnv(gym.Env):
     def _attack_pkm(self, t_id, m_id):
         move = self.a_pkm[t_id].moves[m_id]
         opponent_pkm = self.a_pkm[not t_id]
-        before_pkm = deepcopy(opponent_pkm)
-        opponent_pkm.hp -= TYPE_CHART_MULTIPLIER[move.type][opponent_pkm.p_type] * move.power
-        if opponent_pkm.hp <= 0.:
-            opponent_pkm.hp = 0.
-        damage = before_pkm.hp - opponent_pkm.hp
+        effectiveness_multiplier = calc_type_multiplier(move.type, opponent_pkm.p_type)
+        stab_multiplier = 1.5 if move.type in self.a_pkm[t_id].p_type else 1.
+        damage = move.power * effectiveness_multiplier * stab_multiplier
+        opponent_pkm.hp = max(opponent_pkm.hp - damage, 0.)
         if self.debug:
             self.debug_message[t_id] = "ATTACK with " + str(move) + " to type " + TYPE_TO_STR[
-                opponent_pkm.p_type] + " multiplier=" + str(
-                TYPE_CHART_MULTIPLIER[move.type][opponent_pkm.p_type]) + " causing " + str(
+                opponent_pkm.p_type] + " multiplier=" + str(effectiveness_multiplier) + " causing " + str(
                 damage) + " damage, leaving opponent hp " + str(opponent_pkm.hp) + ''
         return damage
 
     def _battle_pkm(self, a, t_id):
         """
+        Executes the battle
 
         :param a: attack
         :param t_id: trainer id
@@ -291,7 +290,7 @@ class SimplePkmEnv(gym.Env):
         reward = damage_dealt / HIT_POINTS
         if self._fainted_pkm(self.a_pkm[opponent]):
             self.has_fainted = True
-            reward += 1
+            reward += 1.
             next_player_can_attack = False
             if self._fainted_pkm(self.p_pkm[opponent]):
                 terminal = True
@@ -309,24 +308,30 @@ class SimplePkmEnv(gym.Env):
 def encode(s):
     """
     Encode Game state.
+    
     :param s: game state
     :return: encoded game state in one hot vector
     """
     e = []
-    for i in range(0, len(s) - 1):
+    for i in range(0, len(s)):
+        s_i = s[i]
         if i % 2 == 0:
-            b = [0] * N_TYPES
-            b[s[i]] = 1
-            e += b
+            # It's a type
+            if not isinstance(s_i, tuple):
+               s_i = [s_i]
+            for t in s_i:
+                b = [0] * N_TYPES
+                b[t+1] = 1
+                e.extend(b)
         else:
-            e += [(s[i] / HIT_POINTS)]
-    e += [(s[-1] / HIT_POINTS)]
+            # It's a value (hp or power)
+            e.append(s_i / HIT_POINTS)
     return e
-
 
 def decode(e):
     """
     Decode game state.
+
     :param e: encoded game state in one hot vector
     :return: game state
     """
@@ -348,12 +353,12 @@ def get_super_effective_move(t):
     :param t: pokemon type
     :return: a random type that is super effective against pokemon type t
     """
-    _t = [t_[t] for t_ in TYPE_CHART_MULTIPLIER]
-    s = [index for index, value in enumerate(_t) if value == 2]
+    s = [type for type in (TYPE_LIST[1:]) if 
+         calc_type_multiplier(type, t) > 1.]
     if not s:
         print('Warning: Empty List!')
-        return random.randrange(N_TYPES)
-    return random.choice(s)
+        return get_random_type(NONE)
+    return np.random.choice(s)
 
 
 def get_non_very_effective_move(t):
@@ -361,12 +366,12 @@ def get_non_very_effective_move(t):
     :param t: pokemon type
     :return: a random type that is not very effective against pokemon type t
     """
-    _t = [t_[t] for t_ in TYPE_CHART_MULTIPLIER]
-    s = [index for index, value in enumerate(_t) if value == 1 / 2]
+    s = [type for type in (TYPE_LIST[1:]) if 
+         calc_type_multiplier(type, t) < 1.]
     if not s:
         print('Warning: Empty List!')
-        return random.randrange(N_TYPES)
-    return random.choice(s)
+        return get_random_type(NONE)
+    return np.random.choice(s)
 
 
 def get_normal_effective_move(t):
@@ -374,9 +379,46 @@ def get_normal_effective_move(t):
     :param t: pokemon type
     :return: a random type that is not very effective against pokemon type t
     """
-    _t = [t_[t] for t_ in TYPE_CHART_MULTIPLIER]
-    s = [index for index, value in enumerate(_t) if value == 1]
+    s = [type for type in (TYPE_LIST[1:]) if 
+         calc_type_multiplier(type, t) == 1.]
     if not s:
         print('Warning: Empty List!')
-        return random.randrange(N_TYPES)
-    return random.choice(s)
+        return get_random_type(NONE)
+    return np.random.choice(s)
+
+def get_random_type_combo(t=None):
+    """
+    Generates a random type combo.
+
+    :param t: pokemon type.
+    :return: a random type combo, with its primary type being super effective against the type t.
+    """
+    if t is None:
+        primary = get_random_type(NONE)
+    else:
+        primary = get_super_effective_move(t)
+    secondary = get_random_type(primary)
+    return (primary, secondary)
+
+def calc_type_multiplier(att_type, def_type):
+    """
+    Calculates the type advantage multiplier.
+
+    :param att_type: the type of the attacking move.
+    :param def_type: the type of the defending pokemon.
+    :return: the type advantage multiplier.
+    """
+    if isinstance(def_type, tuple):
+        mult_type1 = TYPE_CHART_MULTIPLIER[att_type][def_type[0]]
+        mult_type2 = TYPE_CHART_MULTIPLIER[att_type][def_type[1]] if def_type[1] != NONE else 1.
+        return mult_type1 * mult_type2
+    return TYPE_CHART_MULTIPLIER[att_type][def_type]
+
+def get_random_type(exclude=None):
+    """
+    :param exclude: the types that shouldn't be chosen.
+    :return: a random pokemon type that isn't excluded.
+    """
+    if isinstance(exclude, (list, tuple)):
+        return np.random.choice(TYPE_LIST[~np.isin(TYPE_LIST,exclude)])
+    return np.random.choice(TYPE_LIST[TYPE_LIST != exclude])
