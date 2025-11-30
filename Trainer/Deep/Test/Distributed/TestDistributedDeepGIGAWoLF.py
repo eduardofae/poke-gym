@@ -3,7 +3,7 @@ from Trainer.Deep.Learning.Distributed.DistributedDeepGIGAWoLF import *
 import sys
 
 G_L_RATE = 1e-4
-PI_L_RATE = 1 / 100  # 1 / 200
+PI_L_RATE = 1 / 200
 Y = .9
 TAU = 25  # BATCH_SIZE
 N_EPS = 2000000

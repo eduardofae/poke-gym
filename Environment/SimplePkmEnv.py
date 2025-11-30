@@ -68,17 +68,12 @@ SETTING_RANDOM = 0
 SETTING_FULL_DETERMINISTIC = 1
 SETTING_HALF_DETERMINISTIC = 2
 SETTING_FAIR_IN_ADVANTAGE = 3
+SETTING_META_GAME_AWARE = 4
 
 class SimpleMove:
     def __init__(self, move_type=None, move_power=None, my_type=None):
         if move_type is None or move_type is NONE:
             self.type = get_random_type(NONE)
-            if my_type is not None:
-                # Don't pick attacks that are super effective against self or that self is super effective against
-                while (calc_type_multiplier(self.type, my_type) > 1 or
-                       calc_type_multiplier(my_type[0], self.type) > 1 or
-                       calc_type_multiplier(my_type[1], self.type) > 1):
-                    self.type = get_random_type(NONE)
         else:
             self.type = move_type
         if move_power is None:
@@ -199,6 +194,27 @@ class SimplePkmEnv(gym.Env):
                 SimplePkm(type2, get_super_effective_move(type1), 90, get_non_very_effective_move(type1), 90,
                           get_normal_effective_move(type1), 90, type2, 90)]  # active pokemons
             self.p_pkm = [SimplePkm(), SimplePkm()]  # party pokemons
+        elif self.setting == SETTING_META_GAME_AWARE:
+            pokeA1_type = get_random_type_combo()
+            pokeA1_moves = get_meta_aware_moves(pokeA1_type)
+            pokeA2_type = get_random_type_combo()
+            pokeA2_moves = get_meta_aware_moves(pokeA2_type)
+            pokeP1_type = get_random_type_combo()
+            pokeP1_moves = get_meta_aware_moves(pokeP1_type)
+            pokeP2_type = get_random_type_combo()
+            pokeP2_moves = get_meta_aware_moves(pokeP2_type)
+            self.a_pkm[
+                SimplePkm(pokeA1_type, pokeA1_moves[0], 90, pokeA1_moves[1], 90,
+                          pokeA1_moves[2], 90, pokeA1_moves[3], 90),
+                SimplePkm(pokeA2_type, pokeA2_moves[0], 90, pokeA2_moves[1], 90,
+                          pokeA2_moves[2], 90, pokeA2_moves[3], 90)
+            ]
+            self.a_pkm[
+                SimplePkm(pokeP1_type, pokeP1_moves[0], 90, pokeP1_moves[1], 90,
+                          pokeP1_moves[2], 90, pokeP1_moves[3], 90),
+                SimplePkm(pokeP2_type, pokeP2_moves[0], 90, pokeP2_moves[1], 90,
+                          pokeP2_moves[2], 90, pokeP2_moves[3], 90)
+            ]
         return [encode(self._state_trainer(0)), encode(self._state_trainer(1))]
 
     def render(self, mode='human'):
@@ -248,6 +264,10 @@ class SimplePkmEnv(gym.Env):
                 self.a_pkm[t_id].moves[1].type, self.a_pkm[t_id].moves[1].power,
                 self.a_pkm[t_id].moves[2].type, self.a_pkm[t_id].moves[2].power,
                 self.a_pkm[t_id].moves[3].type, self.a_pkm[t_id].moves[3].power,
+                self.p_pkm[t_id].moves[0].type, self.p_pkm[t_id].moves[0].power,
+                self.p_pkm[t_id].moves[1].type, self.p_pkm[t_id].moves[1].power,
+                self.p_pkm[t_id].moves[2].type, self.p_pkm[t_id].moves[2].power,
+                self.p_pkm[t_id].moves[3].type, self.p_pkm[t_id].moves[3].power,
                 self.p_pkm[not t_id].p_type,
                 self.p_pkm[not t_id].hp]
 
@@ -422,3 +442,24 @@ def get_random_type(exclude=None):
     if isinstance(exclude, (list, tuple)):
         return np.random.choice(TYPE_LIST[~np.isin(TYPE_LIST,exclude)])
     return np.random.choice(TYPE_LIST[TYPE_LIST != exclude])
+
+def get_meta_aware_moves(t):
+    """
+    :param t: Type of the pokemon
+    :return: Shuffled moves using simple meta strategies
+    """
+    moves = [
+        t[0], 
+        t[1], 
+        get_coverage_move(t), 
+        get_coverage_move(t)
+    ]
+    np.random.shuffle(moves)
+    return moves
+
+def get_coverage_move(t):
+    """
+    :param t: Type of the pokemon
+    :return: Returns a type t'' that is super effective against a type t' the is super effective against the type t
+    """
+    return get_super_effective_move(get_super_effective_move(t))
