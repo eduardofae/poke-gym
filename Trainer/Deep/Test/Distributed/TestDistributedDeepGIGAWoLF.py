@@ -21,7 +21,7 @@ def main():
     concurrent_games = int(sys.argv[2])
     url = "localhost"
     hosts = [url + ":" + str(2210 + i) for i in range(concurrent_games)]
-    env = SimplePkmEnv(SETTING_HALF_DETERMINISTIC)
+    env = SimplePkmEnv(SETTING_META_GAME_AWARE)
     trainer = DistributedDeepGIGAWoLF()
     print('train', task_index)
     trainer.train(env, G_L_RATE, concurrent_games, PI_L_RATE, Y, TAU, N_EPS, N_STEPS, E_RATE, N_PLAYERS, MODEL_PATH,

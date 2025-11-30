@@ -203,18 +203,16 @@ class SimplePkmEnv(gym.Env):
             pokeP1_moves = get_meta_aware_moves(pokeP1_type)
             pokeP2_type = get_random_type_combo()
             pokeP2_moves = get_meta_aware_moves(pokeP2_type)
-            self.a_pkm[
-                SimplePkm(pokeA1_type, pokeA1_moves[0], 90, pokeA1_moves[1], 90,
+            self.a_pkm = [
+                SimplePkm(pokeA1_type, HIT_POINTS, pokeA1_moves[0], 90, pokeA1_moves[1], 90,
                           pokeA1_moves[2], 90, pokeA1_moves[3], 90),
-                SimplePkm(pokeA2_type, pokeA2_moves[0], 90, pokeA2_moves[1], 90,
-                          pokeA2_moves[2], 90, pokeA2_moves[3], 90)
-            ]
-            self.a_pkm[
-                SimplePkm(pokeP1_type, pokeP1_moves[0], 90, pokeP1_moves[1], 90,
+                SimplePkm(pokeA2_type, HIT_POINTS, pokeA2_moves[0], 90, pokeA2_moves[1], 90,
+                          pokeA2_moves[2], 90, pokeA2_moves[3], 90)]
+            self.p_pkm = [
+                SimplePkm(pokeP1_type, HIT_POINTS, pokeP1_moves[0], 90, pokeP1_moves[1], 90,
                           pokeP1_moves[2], 90, pokeP1_moves[3], 90),
-                SimplePkm(pokeP2_type, pokeP2_moves[0], 90, pokeP2_moves[1], 90,
-                          pokeP2_moves[2], 90, pokeP2_moves[3], 90)
-            ]
+                SimplePkm(pokeP2_type, HIT_POINTS, pokeP2_moves[0], 90, pokeP2_moves[1], 90,
+                          pokeP2_moves[2], 90, pokeP2_moves[3], 90)]
         return [encode(self._state_trainer(0)), encode(self._state_trainer(1))]
 
     def render(self, mode='human'):
