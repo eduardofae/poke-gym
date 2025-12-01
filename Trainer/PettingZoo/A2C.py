@@ -1,7 +1,8 @@
-from stable_baselines3 import PPO
+from stable_baselines3 import A2C
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.callbacks import CheckpointCallback
 
 from Environment.PettingZooEnv import (
     SelfPlayWrapper,
@@ -14,30 +15,29 @@ MODEL_PATH = '.\\Model\\PettingZoo\\SB3\\'
 def train():
     def make_env():
         return Monitor(SelfPlayWrapper(setting=SETTING_META_GAME_AWARE))
+    
+    env = make_env()
 
-    env = DummyVecEnv([make_env])
-
-    model = PPO(
-        "MlpPolicy",
-        env,
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=64,
+    model = A2C(
+        policy="MlpPolicy",
+        env=env,
+        learning_rate=7e-4,
         gamma=0.99,
-        gae_lambda=0.95,
+        n_steps=5,
         ent_coef=0.01,
         verbose=1,
     )
 
-    model.learn(total_timesteps=300_000)
-    model.save(MODEL_PATH + "ppo_pkm_selfplay.zip")
-    print("\nModel saved to ppo_pkm_selfplay.zip")
+    callback = CheckpointCallback(save_freq=100000, save_path=MODEL_PATH + "a2c_checkpoints\\")
+
+    model.learn(total_timesteps=1_000_000, callback=callback)
+    model.save(MODEL_PATH + "a2c_pkm_model")
 
     env.close()
 
     return model
 
-def evaluate(model):
+def evaluate(model=MODEL_PATH + "a2c_pkm_model"):
     """
     Evaluation in the fully deterministic Pokémon configuration.
     Opponent = frozen copy of trained model.
@@ -53,6 +53,9 @@ def evaluate(model):
 
     env = DummyVecEnv([make_eval_env])
 
+    if isinstance(model, str):
+        model = A2C.load(model, env=env)
+
     mean_reward, std_reward = evaluate_policy(
         model,
         env,
@@ -61,7 +64,7 @@ def evaluate(model):
     )
 
     print("\n=====================================")
-    print(" PPO Evaluation (Deterministic Env)")
+    print(" A2C Evaluation (Deterministic Env)")
     print("=====================================")
     print(f" Mean reward: {mean_reward}")
     print(f" Std reward : {std_reward}")
@@ -71,8 +74,8 @@ def evaluate(model):
 
 
 if __name__ == "__main__":
-    print("Training PPO in META_GAME_AWARE setting...")
+    print("Training A2C in META_GAME_AWARE setting...")
     model = train()
 
-    print("\nEvaluating PPO in FULL_DETERMINISTIC setting...")
+    print("\nEvaluating A2C in FULL_DETERMINISTIC setting...")
     evaluate(model)
