@@ -1,6 +1,11 @@
+import functools
+
 import gymnasium as gym
-from gymnasium import spaces
 import numpy as np
+from gymnasium.spaces import Discrete, Box
+from copy import copy
+
+from pettingzoo import ParallelEnv
 
 # type codification
 NONE = -1
@@ -70,102 +75,173 @@ SETTING_HALF_DETERMINISTIC = 2
 SETTING_FAIR_IN_ADVANTAGE = 3
 SETTING_META_GAME_AWARE = 4
 
-class SimpleMove:
-    def __init__(self, move_type=None, move_power=None, my_type=None):
-        if move_type is None or move_type == NONE:
-            self.type = get_random_type(NONE)
+class SelfPlayWrapper(gym.Env):
+    """
+    Converts a 2-player Parallel PettingZoo environment into a single-agent
+    Gymnasium environment compatible with Stable-Baselines3.
+
+    - Agent controls player_0
+    - Opponent (player_1) uses either a random policy or a fixed SB3 policy
+    """
+
+    metadata = {"render_modes": ["human"]}
+
+    def __init__(self, opponent_policy=None, setting=SETTING_META_GAME_AWARE):
+        super().__init__()
+
+        self.env = SimplePkmEnv(setting=setting)
+        self.opponent_policy = opponent_policy  # SB3 model or None (random)
+
+        # Get sample obs to determine space dimensions
+        sample_obs, _ = self.env.reset()
+        obs0 = sample_obs["player_0"]
+
+        self.observation_space = Box(
+            low=-np.inf, high=np.inf,
+            shape=obs0.shape, dtype=np.float32
+        )
+        self.action_space = self.env.action_space("player_0")
+
+        self.last_opp_obs = None
+
+    def reset(self, seed=None, options=None):
+        obs_dict, info = self.env.reset(seed=seed)
+        self.last_opp_obs = obs_dict["player_1"]
+        return obs_dict["player_0"].astype(np.float32), info
+
+    def step(self, action):
+        # Opponent action
+        if self.opponent_policy is None:
+            opp_action = np.random.randint(self.action_space.n)
         else:
-            self.type = move_type
-        if move_power is None:
-            self.power = np.random.randint(POWER_MIN, POWER_MAX)
-        else:
-            self.power = move_power
+            opp_action, _ = self.opponent_policy.predict(
+                np.array(self.last_opp_obs, dtype=np.float32),
+                deterministic=True
+            )
 
-    def __str__(self):
-        return "Move(" + TYPE_TO_STR[self.type] + ", " + str(self.power) + ")"
+        actions = {
+            "player_0": int(action),
+            "player_1": int(opp_action)
+        }
 
-class SimplePkm:
-    def __init__(self, p_type=None, hp=HIT_POINTS,
-                 type0=None, type0power=None, type1=None, type1power=None,
-                 type2=None, type2power=None, type3=None, type3power=None):
-        self.hp = hp
-        if p_type is None:
-            self.p_type = get_random_type_combo()
-            self.moves = [SimpleMove(my_type=self.p_type) for i in range(N_MOVES - 1)] + [
-                SimpleMove(move_type=self.p_type[0])]
-        else:
-            if isinstance(p_type, tuple):
-                self.p_type = p_type
-            else:
-                self.p_type = (p_type, NONE)
-            self.moves = [SimpleMove(move_type=type0, move_power=type0power),
-                          SimpleMove(move_type=type1, move_power=type1power),
-                          SimpleMove(move_type=type2, move_power=type2power),
-                          SimpleMove(move_type=type3, move_power=type3power)]
+        obs_dict, rewards, terms, truncs, infos = self.env.step(actions)
 
-    def __str__(self):
-        return 'Pokemon(' + TYPE_TO_STR[self.p_type[0]] + '/' + TYPE_TO_STR[self.p_type[1]] + ', HP ' + str(self.hp) + ', ' + str(self.moves[0]) + ', ' + str(
-            self.moves[1]) + ', ' + str(self.moves[2]) + ', ' + str(self.moves[3]) + ')'
+        # Save next opponent obs
+        if "player_1" in obs_dict:
+            self.last_opp_obs = obs_dict["player_1"]
 
+        return (
+            obs_dict["player_0"].astype(np.float32),
+            rewards["player_0"],
+            terms["player_0"],
+            truncs["player_0"],
+            infos,
+        )
 
-class SimplePkmEnv(gym.Env):
-    def __init__(self, setting=SETTING_RANDOM, debug=False):
-        self.numberOfActions = N_MOVES + 1
+class SimplePkmEnv(ParallelEnv):
+    metadata = {"render_modes": ["human"], "name": "SimplePkmEnv"}
+
+    def __init__(self, setting=SETTING_RANDOM, debug=False, render_mode=None):
+        """
+        The init method takes in environment arguments and should define the following attributes:
+        - possible_agents
+        - render_mode
+
+        Note: as of v1.18.1, the action_spaces and observation_spaces attributes are deprecated.
+        Spaces should be defined in the action_space() and observation_space() methods.
+        If these methods are not overridden, spaces will be inferred from self.observation_spaces/action_spaces, raising a warning.
+
+        These attributes should not be changed after initialization.
+        """
+        self.possible_agents = ["player_" + str(r) for r in range(2)]
+
+        # optional: a mapping between agent name and ID
+        self.agent_name_mapping = dict(
+            zip(self.possible_agents, list(range(len(self.possible_agents))))
+        )
+        self.render_mode = render_mode
+        self.setting = setting
+        self.debug = debug
         self.a_pkm = [SimplePkm(), SimplePkm()]  # active pokemons
         self.p_pkm = [SimplePkm(), SimplePkm()]  # party pokemons
-        self.setting = setting
-        self.action_space = spaces.Discrete(N_MOVES + 1)
-        self.observation_space = spaces.Discrete(len(encode(self._state_trainer(0))))
-        self.first = None
-        self.second = None
-        # debug
-        self.debug = debug
-        self.debug_message = ['', '']
-        self.switched = [False, False]
-        self.has_fainted = False
 
-    def step(self, actions):
-        self.has_fainted = False
-        self.switched = [False, False]
-        r = [0., 0.]
-        # switch pokemon
-        if actions[0] == SWITCH_ACTION:
-            if not SimplePkmEnv._fainted_pkm(self.p_pkm[0]):
-                self._switch_pkm(0)
-        if actions[1] == SWITCH_ACTION:
-            if not SimplePkmEnv._fainted_pkm(self.p_pkm[1]):
-                self._switch_pkm(1)
+    # Observation space should be defined here.
+    # lru_cache allows observation and action spaces to be memoized, reducing clock cycles required to get each agent's space.
+    # If your spaces change over time, remove this line (disable caching).
+    @functools.lru_cache(maxsize=None)
+    def observation_space(self, agent):
+        # gymnasium spaces are defined and documented here: https://gymnasium.farama.org/api/spaces/
+        # Discrete(4) means an integer in range(0, 4)
+        return Discrete(len(encode(self._state_trainer(0))))
 
-        # pokemon attacks
-        order = [0, 1]
-        # random attack order
-        np.random.shuffle(order)
-        self.first = order[0]
-        self.second = order[1]
+    # Action space should be defined here.
+    # If your spaces change over time, remove this line (disable caching).
+    @functools.lru_cache(maxsize=None)
+    def action_space(self, agent):
+        return Discrete(N_MOVES + 1)
 
-        terminal = False
-        can_player2_attack = True
+    def render(self, view='general'):
+        """
+        Renders the environment. In human mode, it can print to terminal, open
+        up a graphical window, or open up some other display that a human can see and understand.
+        """
+        if self.render_mode is None:
+            gym.logger.warn(
+                "You are calling render method without specifying any render mode."
+            )
+            return
 
-        # first attack
-        dmg_dealt1 = 0
-        dmg_dealt2 = 0
-
-        if actions[self.first] != SWITCH_ACTION:
-            r[self.first], terminal, can_player2_attack, dmg_dealt1 = self._battle_pkm(actions[self.first], self.first)
-
-        if can_player2_attack and actions[self.second] != SWITCH_ACTION:
-            r[self.second], terminal, _, dmg_dealt2 = self._battle_pkm(actions[self.second], self.second)
-        elif self.debug:
-            self.debug_message[self.second] = 'can\'t perform any action'
-
-        r[self.first] -= dmg_dealt2 / HIT_POINTS
-        r[self.second] -= dmg_dealt1 / HIT_POINTS
-
-        return [encode(self._state_trainer(0)), encode(self._state_trainer(1))], r, terminal, None
-
-    def reset(self):
         if self.debug:
-            self.debug_message = ['', '']
+            if self.debug_message[0] != '' and self.debug_message[1] != '':
+                if self.switched[0]:
+                    if self.has_fainted:
+                        print('Trainer 1', self.debug_message[1])
+                        print('Trainer 0', self.debug_message[0])
+                    else:
+                        print('Trainer 0', self.debug_message[0])
+                        print('Trainer 1', self.debug_message[1])
+                elif self.switched[1]:
+                    if self.has_fainted:
+                        print('Trainer 0', self.debug_message[0])
+                        print('Trainer 1', self.debug_message[1])
+                    else:
+                        print('Trainer 1', self.debug_message[1])
+                        print('Trainer 0', self.debug_message[0])
+                elif self.first == 0:
+                    print('Trainer 0', self.debug_message[0])
+                    print('Trainer 1', self.debug_message[1])
+                else:
+                    print('Trainer 1', self.debug_message[1])
+                    print('Trainer 0', self.debug_message[0])
+            print()
+        print('Trainer 0')
+        print('Active', self.a_pkm[0])
+        print('Party', self.p_pkm[0])
+        print('Trainer 1')
+        print('Active', self.a_pkm[1])
+        if view != 'player':
+            print('Party', self.p_pkm[1])
+        print()
+
+    def close(self):
+        """
+        Close should release any graphical displays, subprocesses, network connections
+        or any other environment data which should not be kept around after the
+        user is no longer using the environment.
+        """
+        pass
+
+    def reset(self, seed=None, options=None):
+        """
+        Reset needs to initialize the `agents` attribute and must set up the
+        environment so that render(), and step() can be called without issues.
+        Here it initializes the `num_moves` variable which counts the number of
+        hands that are played.
+        Returns the observations for each agent
+        """
+        self.agents = copy(self.possible_agents)
+        self.num_moves = 0
+
         if self.setting == SETTING_RANDOM:
             self.a_pkm = [SimplePkm(), SimplePkm()]  # active pokemons
             self.p_pkm = [SimplePkm(), SimplePkm()]  # party pokemons
@@ -213,41 +289,82 @@ class SimplePkmEnv(gym.Env):
                           pokeP1_moves[2], 90, pokeP1_moves[3], 90),
                 SimplePkm(pokeP2_type, HIT_POINTS, pokeP2_moves[0], 90, pokeP2_moves[1], 90,
                           pokeP2_moves[2], 90, pokeP2_moves[3], 90)]
-        return [encode(self._state_trainer(0)), encode(self._state_trainer(1))]
+    
+        observations = {
+            agent: np.array(encode(self._state_trainer(i))) 
+            for i, agent in enumerate(self.agents)
+        }
+        infos = { agent: {} for agent in self.agents }
+        return observations, infos
 
-    def render(self, mode='human'):
-        if self.debug:
-            if self.debug_message[0] != '' and self.debug_message[1] != '':
-                if self.switched[0]:
-                    if self.has_fainted:
-                        print('Trainer 1', self.debug_message[1])
-                        print('Trainer 0', self.debug_message[0])
-                    else:
-                        print('Trainer 0', self.debug_message[0])
-                        print('Trainer 1', self.debug_message[1])
-                elif self.switched[1]:
-                    if self.has_fainted:
-                        print('Trainer 0', self.debug_message[0])
-                        print('Trainer 1', self.debug_message[1])
-                    else:
-                        print('Trainer 1', self.debug_message[1])
-                        print('Trainer 0', self.debug_message[0])
-                elif self.first == 0:
-                    print('Trainer 0', self.debug_message[0])
-                    print('Trainer 1', self.debug_message[1])
-                else:
-                    print('Trainer 1', self.debug_message[1])
-                    print('Trainer 0', self.debug_message[0])
-            print()
-        print('Trainer 0')
-        print('Active', self.a_pkm[0])
-        print('Party', self.p_pkm[0])
-        print('Trainer 1')
-        print('Active', self.a_pkm[1])
-        if mode != 'player':
-            print('Party', self.p_pkm[1])
-        print()
+    def step(self, actions):
+        """
+        step(action) takes in an action for each agent and should return the
+        - observations
+        - rewards
+        - terminations
+        - truncations
+        - infos
+        dicts where each dict looks like {agent_1: item_1, agent_2: item_2}
+        """
+        # If a user passes in actions with no agents, then just return empty observations, etc.
+        if not actions:
+            self.agents = []
+            return {}, {}, {}, {}, {}
+        
+        self.has_fainted = False
+        self.switched = [False, False]
+        r = {agent: 0. for agent in self.agents}
+        # switch pokemon
+        if actions[self.agents[0]] == SWITCH_ACTION:
+            if not SimplePkmEnv._fainted_pkm(self.p_pkm[0]):
+                self._switch_pkm(0)
+        if actions[self.agents[1]] == SWITCH_ACTION:
+            if not SimplePkmEnv._fainted_pkm(self.p_pkm[1]):
+                self._switch_pkm(1)
 
+        # pokemon attacks
+        order = [0, 1]
+        # random attack order
+        np.random.shuffle(order)
+        self.first = order[0]
+        self.second = order[1]
+        action1 = actions[self.agents[self.first]]
+        action2 = actions[self.agents[self.second]]
+
+        terminal = False
+        can_player2_attack = True
+
+        # first attack
+        dmg_dealt1 = 0
+        dmg_dealt2 = 0
+
+        if action1 != SWITCH_ACTION:
+            r[self.agents[self.first]], terminal, can_player2_attack, dmg_dealt1 = self._battle_pkm(action1, self.first)
+
+        if can_player2_attack and action2 != SWITCH_ACTION:
+            r[self.agents[self.second]], terminal, _, dmg_dealt2 = self._battle_pkm(action2, self.second)
+        elif self.debug:
+            self.debug_message[self.second] = 'can\'t perform any action'
+
+        r[self.agents[self.first]] -= dmg_dealt2 / HIT_POINTS
+        r[self.agents[self.second]] -= dmg_dealt1 / HIT_POINTS        
+
+        terminations = { agent: terminal for agent in self.agents }
+        truncations = { agent: False for agent in self.agents }
+
+        observations = {
+            agent: np.array(encode(self._state_trainer(i)))
+            for i, agent in enumerate(self.agents)
+        }
+
+        infos = {agent: {} for agent in self.agents}
+
+        if terminal:
+            self.agents = []
+
+        return observations, r, terminations, truncations, infos
+    
     def change_setting(self, setting):
         self.setting = setting
 
@@ -292,7 +409,7 @@ class SimplePkmEnv(gym.Env):
                 opponent_pkm.p_type] + " multiplier=" + str(effectiveness_multiplier) + " causing " + str(
                 damage) + " damage, leaving opponent hp " + str(opponent_pkm.hp) + ''
         return damage
-
+    
     def _battle_pkm(self, a, t_id):
         """
         Executes the battle
@@ -317,10 +434,47 @@ class SimplePkmEnv(gym.Env):
                 if self.debug:
                     self.debug_message[opponent] += " FAINTED"
         return reward, terminal, next_player_can_attack, damage_dealt
-
+    
     @staticmethod
     def _fainted_pkm(pkm):
         return pkm.hp == 0
+    
+class SimpleMove:
+    def __init__(self, move_type=None, move_power=None, my_type=None):
+        if move_type is None or move_type == NONE:
+            self.type = get_random_type(NONE)
+        else:
+            self.type = move_type
+        if move_power is None:
+            self.power = np.random.randint(POWER_MIN, POWER_MAX)
+        else:
+            self.power = move_power
+
+    def __str__(self):
+        return "Move(" + TYPE_TO_STR[self.type] + ", " + str(self.power) + ")"
+
+class SimplePkm:
+    def __init__(self, p_type=None, hp=HIT_POINTS,
+                 type0=None, type0power=None, type1=None, type1power=None,
+                 type2=None, type2power=None, type3=None, type3power=None):
+        self.hp = hp
+        if p_type is None:
+            self.p_type = get_random_type_combo()
+            self.moves = [SimpleMove(my_type=self.p_type) for i in range(N_MOVES - 1)] + [
+                SimpleMove(move_type=self.p_type[0])]
+        else:
+            if isinstance(p_type, tuple):
+                self.p_type = p_type
+            else:
+                self.p_type = (p_type, NONE)
+            self.moves = [SimpleMove(move_type=type0, move_power=type0power),
+                          SimpleMove(move_type=type1, move_power=type1power),
+                          SimpleMove(move_type=type2, move_power=type2power),
+                          SimpleMove(move_type=type3, move_power=type3power)]
+
+    def __str__(self):
+        return 'Pokemon(' + TYPE_TO_STR[self.p_type[0]] + '/' + TYPE_TO_STR[self.p_type[1]] + ', HP ' + str(self.hp) + ', ' + str(self.moves[0]) + ', ' + str(
+            self.moves[1]) + ', ' + str(self.moves[2]) + ', ' + str(self.moves[3]) + ')'
 
 
 def encode(s):
