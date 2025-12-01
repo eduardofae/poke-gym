@@ -1,3 +1,5 @@
+import faulthandler
+faulthandler.enable()
 from Util.Projection import projection
 from threading import Thread
 import numpy as np
@@ -11,7 +13,7 @@ tf.compat.v1.disable_v2_behavior()
 class DistributedDeepGIGAWoLF:
     class Trainer:
 
-        def __init__(self, env, optimizer, g_net, t_net, e_rate, pi_l_rate, y, leader, name='player', global_id=0):
+        def __init__(self, env, optimizer, g_net, t_net, e_rate, pi_l_rate, y, leader, name='player', global_id=0, writer=None):
             self.name = name
             self.g_net = g_net
             self.t_net = t_net
@@ -30,6 +32,8 @@ class DistributedDeepGIGAWoLF:
             self.s_batch = []
             self.sess = None
             self.leader = leader
+            self.writer = writer
+            self.global_step_op = tf.compat.v1.train.get_global_step()
 
         def set_session(self, sess):
             self.sess = sess
@@ -92,7 +96,16 @@ class DistributedDeepGIGAWoLF:
             """
             feed_dict = {self.net.target_q: self.q_t_batch, self.net.target_pi: self.pi_t_batch,
                          self.net.target_pi_slow: self.pi_slow_t_batch, self.net.in_state: self.s_batch}
-            self.sess.run(self.net.apply_gradients, feed_dict=feed_dict)
+            # If we have a writer (only for the leader), run and log summaries
+            if self.writer:
+                _, summaries, step = self.sess.run(
+                    [self.net.apply_gradients, self.net.summary_op, self.global_step_op], 
+                    feed_dict=feed_dict
+                )
+                self.writer.add_summary(summaries, step)
+            else:
+                self.sess.run(self.net.apply_gradients, feed_dict=feed_dict)
+            #self.sess.run(self.net.apply_gradients, feed_dict=feed_dict)
             # empty batches
             self.pi_t_batch = []
             self.pi_slow_t_batch = []
@@ -114,7 +127,7 @@ class DistributedDeepGIGAWoLF:
     class Simulation(Thread):
 
         def __init__(self, env, optimizer, g_net, pi_l_rate, y, e_rate, tau, n_eps, n_steps, n_players, g_id,
-                     global_episodes, decay_percentage, min_e_rate, name='gameplay'):
+                     global_episodes, decay_percentage, min_e_rate, name='gameplay', model_path=None, task_index=0):
             super().__init__()
             self.env = env
             self.pi_l_rate = pi_l_rate
@@ -122,14 +135,20 @@ class DistributedDeepGIGAWoLF:
             self.player = []
             self.name = name
             self.global_episodes = global_episodes
+            # Setup writer only for the chief task and first game to avoid duplicate logs
+            self.writer = None
+            if task_index == 0 and g_id == 0 and model_path:
+                self.writer = tf.compat.v1.summary.FileWriter(model_path)
             p = 0
             with tf.compat.v1.variable_scope(self.name):
                 self.increment = global_episodes.assign_add(1)
             while p < n_players:
+                # Only pass the writer to the first player (leader) to log training stats
+                p_writer = self.writer if p == 0 else None
                 self.player.append(
                     DistributedDeepGIGAWoLF.Trainer(env, optimizer, g_net[p]['global'], g_net[p]['target'], e_rate,
                                                     pi_l_rate, y, g_id == 0, name=self.name + '_' + str(p),
-                                                    global_id=p))
+                                                    global_id=p, writer=p_writer))
                 p += 1
             self.n_eps = n_eps
             self.n_steps = n_steps
@@ -140,6 +159,9 @@ class DistributedDeepGIGAWoLF:
 
         def set_session(self, sess):
             self.sess = sess
+            # If we created a writer (in __init__), we can add the graph to it now
+            if self.writer:
+                self.writer.add_graph(sess.graph)
             for p in self.player:
                 p.set_session(self.sess)
 
@@ -191,9 +213,21 @@ class DistributedDeepGIGAWoLF:
     def train(env, g_l_rate, concurrent_games, pi_l_rate, y, tau, n_eps, n_steps, e_rate, n_players, model_path,
               decay_percentage, min_e_rate, hosts, task_index):
         tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+        #print("a")
         cluster = tf.train.ClusterSpec({"dqn": hosts})
-        server = tf.distribute.Server(cluster, job_name="dqn", task_index=task_index)
+        #print("a")
+        config = tf.compat.v1.ConfigProto()
+        config.gpu_options.allow_growth = True
+        server = tf.distribute.Server(cluster,
+                                      job_name="dqn",
+                                      task_index=task_index,
+        #                              config=config,
+                                      start=False)
+        #print("cheguei muito vini")
+        server.start()
+        #print("passei do start")
         tf.compat.v1.reset_default_graph()
+        #print("cheguei 1")
         with tf.device(
                 tf.compat.v1.train.replica_device_setter(worker_device="/job:worker/task:%d" % task_index, cluster=cluster)):
             global_episodes = tf.compat.v1.train.get_or_create_global_step()
@@ -213,14 +247,14 @@ class DistributedDeepGIGAWoLF:
                 game_pool.append(
                     DistributedDeepGIGAWoLF.Simulation(copy.deepcopy(env), optimizer, g_net, pi_l_rate, y, e_rate, tau,
                                                        n_eps, n_steps, n_players, g, global_episodes, decay_percentage,
-                                                       min_e_rate, name=str(g)))
+                                                       min_e_rate, name=str(g), model_path=model_path, task_index=task_index))
                 g += 1
         # tf.summary.FileWriter('./Graph', sess.graph)
         hooks = [tf.compat.v1.train.StopAtStepHook(last_step=50000000)]
         print('MonitoredTrainingSession', task_index)
 
         with tf.compat.v1.train.MonitoredTrainingSession(master=server.target, is_chief=(task_index == 0),
-                                               config=tf.compat.v1.ConfigProto(), save_summaries_steps=100,
+                                               config=tf.compat.v1.ConfigProto(), save_summaries_steps=None,
                                                save_summaries_secs=None, save_checkpoint_secs=600,
                                                checkpoint_dir=model_path, hooks=hooks) as sess:
             print('run', task_index)
@@ -277,3 +311,14 @@ class DistributedDeepGIGAWoLF:
 
             self.global_to_local = copy_network('global_' + str(global_id), name)
             self.global_to_target = copy_network('global_' + str(global_id), 'target_' + str(global_id))
+
+            with tf.name_scope('summaries'):
+                summary_list = []
+                summary_list.append(tf.compat.v1.summary.scalar('loss/total_loss', self.loss))
+                summary_list.append(tf.compat.v1.summary.scalar('loss/q_loss', tf.reduce_mean(self.loss_q)))
+                summary_list.append(tf.compat.v1.summary.scalar('loss/pi_loss', self.loss_pi))
+                summary_list.append(tf.compat.v1.summary.scalar('stats/avg_max_q', tf.reduce_mean(self.max_q)))
+                summary_list.append(tf.compat.v1.summary.histogram('stats/policy_distribution', self.policy))
+
+                self.summary_op = tf.compat.v1.summary.merge(summary_list)
+
