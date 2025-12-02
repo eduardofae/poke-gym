@@ -13,7 +13,10 @@ from Environment.PettingZooEnv import (
 N_MATCHES = 10_000
 
 if __name__ == "__main__":
-    trainer1 = PPOTrainer().evaluate(N_MATCHES, SETTING_META_GAME_AWARE)
-    trainer2 = A2CTrainer().evaluate(N_MATCHES, SETTING_META_GAME_AWARE)
-    trainer3 = DQNTrainer().evaluate(N_MATCHES, SETTING_META_GAME_AWARE)
-    trainer4 = RPPOTrainer().evaluate(N_MATCHES, SETTING_META_GAME_AWARE)
+    trainers = [PPOTrainer(), A2CTrainer(), DQNTrainer(), RPPOTrainer()]
+    for i, trainer in enumerate(trainers):
+        for j, opponent in enumerate(trainers):
+            if i == j: continue
+            trainer.play_against(opponent, N_MATCHES, SETTING_META_GAME_AWARE)
+            trainer.play_against(opponent, N_MATCHES, SETTING_FULL_DETERMINISTIC)
+        

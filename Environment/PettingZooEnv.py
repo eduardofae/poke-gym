@@ -81,6 +81,14 @@ SETTING_HALF_DETERMINISTIC = 2
 SETTING_FAIR_IN_ADVANTAGE = 3
 SETTING_META_GAME_AWARE = 4
 
+SETTING_TO_STR = {
+    SETTING_RANDOM: "RANDOM", 
+    SETTING_FULL_DETERMINISTIC: "FULL_DETERMINISTIC", 
+    SETTING_HALF_DETERMINISTIC: "HALF_DETERMINISTIC", 
+    SETTING_FAIR_IN_ADVANTAGE: "FAIR_IN_ADVANTAGE",
+    SETTING_META_GAME_AWARE: "META_GAME_AWARE"
+}
+
 class SelfPlayWrapper(gym.Env):
     """
     Converts a 2-player Parallel PettingZoo environment into a single-agent
@@ -363,7 +371,6 @@ class SimplePkmEnv(ParallelEnv):
             self.consecutive_no_damage += 1
         else:
             self.consecutive_no_damage = 0
-
         if self.switched[0] and self.switched[1]:
             self.consecutive_switches +=1
         else:
@@ -380,6 +387,9 @@ class SimplePkmEnv(ParallelEnv):
         infos = {agent: {} for agent in self.agents}
 
         if terminal:
+            first_won = SimplePkmEnv._fainted_pkm(self.a_pkm[self.first])
+            r[self.agents[self.first]] = 1 if first_won else 0
+            r[self.agents[self.second]] = 0 if first_won else 1
             self.agents = []
 
         return observations, r, terminations, truncations, infos

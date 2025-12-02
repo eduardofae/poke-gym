@@ -5,8 +5,10 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 
 from Environment.PettingZooEnv import (
     SelfPlayWrapper,
+    SimplePkmEnv,
     SETTING_META_GAME_AWARE,
     SETTING_FULL_DETERMINISTIC,
+    SETTING_TO_STR
 )
 
 MODEL_FOLDER = '.\\Model\\PettingZoo\\SB3'
@@ -61,3 +63,45 @@ class SB3Trainer():
         print("=====================================\n")
 
         env.close()
+    
+    def play_against(self, trainer, n_matches, setting=SETTING_META_GAME_AWARE):
+        env = SimplePkmEnv(setting)
+        victories = 0
+        draws = 0
+        model = trainer.model
+        for _ in range(n_matches):
+            obs, _ = env.reset()
+            while True:
+                player = env.agents[0]
+                opponent = env.agents[1]
+                action, _ = self.model.predict(
+                    obs[player],
+                    deterministic=True
+                )
+                opp_action, _ = model.predict(
+                    obs[opponent],
+                    deterministic=True
+                )
+                actions = {
+                    player: int(action),
+                    opponent: int(opp_action)
+                }
+                obs_dict, rewards, terms, truncs, _ = env.step(actions)
+                
+                if terms[player]:
+                    victories += rewards[player]
+                    break
+
+                if truncs[player]:
+                    draws += 1
+                    break
+        
+        defeats = n_matches - (draws + victories)
+        print("\n=====================================")
+        print(f" {self.model_name} X {trainer.model_name} ({SETTING_TO_STR[setting]}) ({n_matches})")
+        print("=====================================")
+        print(f" Victories: {victories} ({victories/n_matches*100:.2f}%)")
+        print(f" Draws: {draws} ({draws/n_matches*100:.2f}%)")
+        print(f" Defeats: {defeats} ({defeats/n_matches*100:.2f}%)")
+        print("=====================================\n")
+
