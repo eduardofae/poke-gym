@@ -19,9 +19,9 @@ class SB3Trainer():
         self.model_path = f'{MODEL_FOLDER}\\{model_name}_pkm_model'
         self.checkpoint_folder = f'{MODEL_FOLDER}\\{model_name}_checkpoints\\'
 
-    def train(self):
+    def train(self, model=None):
         def make_env():
-            return Monitor(SelfPlayWrapper(setting=SETTING_META_GAME_AWARE))
+            return Monitor(SelfPlayWrapper(opponent_policy=model, setting=SETTING_META_GAME_AWARE))
         
         env = DummyVecEnv([make_env])
 
