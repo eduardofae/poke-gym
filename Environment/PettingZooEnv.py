@@ -4,8 +4,14 @@ import gymnasium as gym
 import numpy as np
 from gymnasium.spaces import Discrete, Box
 from copy import copy
+import time
 
 from pettingzoo import ParallelEnv
+
+# Avoid infinite games due to constant switching
+MAX_CONSECUTIVE_SWITCHES = 4
+MAX_CONSECUTIVE_ZERO_DMG_DEALT = 4
+SMALL_DAMAGE_THRESHOLD = 1e-4
 
 # type codification
 NONE = -1
@@ -162,6 +168,7 @@ class SimplePkmEnv(ParallelEnv):
         self.render_mode = render_mode
         self.setting = setting
         self.debug = debug
+        self.debug_message = ['', '']
         self.a_pkm = [SimplePkm(), SimplePkm()]  # active pokemons
         self.p_pkm = [SimplePkm(), SimplePkm()]  # party pokemons
 
@@ -241,6 +248,8 @@ class SimplePkmEnv(ParallelEnv):
         """
         self.agents = copy(self.possible_agents)
         self.num_moves = 0
+        self.consecutive_switches = 0
+        self.consecutive_no_damage = 0
 
         if self.setting == SETTING_RANDOM:
             self.a_pkm = [SimplePkm(), SimplePkm()]  # active pokemons
@@ -350,8 +359,18 @@ class SimplePkmEnv(ParallelEnv):
         r[self.agents[self.first]] -= dmg_dealt2 / HIT_POINTS
         r[self.agents[self.second]] -= dmg_dealt1 / HIT_POINTS        
 
+        if dmg_dealt1 + dmg_dealt2 - SMALL_DAMAGE_THRESHOLD <= 0:
+            self.consecutive_no_damage += 1
+        else:
+            self.consecutive_no_damage = 0
+
+        if self.switched[0] and self.switched[1]:
+            self.consecutive_switches +=1
+        else:
+            self.consecutive_switches = 0
+
         terminations = { agent: terminal for agent in self.agents }
-        truncations = { agent: False for agent in self.agents }
+        truncations = { agent: self.consecutive_switches >= MAX_CONSECUTIVE_SWITCHES or self.consecutive_no_damage >= MAX_CONSECUTIVE_ZERO_DMG_DEALT for agent in self.agents }
 
         observations = {
             agent: np.array(encode(self._state_trainer(i)))
@@ -406,8 +425,9 @@ class SimplePkmEnv(ParallelEnv):
         opponent_pkm.hp = max(opponent_pkm.hp - damage, 0.)
         if self.debug:
             self.debug_message[t_id] = "ATTACK with " + str(move) + " to type " + TYPE_TO_STR[
-                opponent_pkm.p_type] + " multiplier=" + str(effectiveness_multiplier) + " causing " + str(
-                damage) + " damage, leaving opponent hp " + str(opponent_pkm.hp) + ''
+                opponent_pkm.p_type[0]] + '/' + TYPE_TO_STR[opponent_pkm.p_type[1]] + " multiplier=" + str(
+                effectiveness_multiplier) + " causing " + str(damage) + " damage, leaving opponent hp " + str(
+                opponent_pkm.hp) + ''
         return damage
     
     def _battle_pkm(self, a, t_id):
