@@ -4,12 +4,10 @@ import gymnasium as gym
 import numpy as np
 from gymnasium.spaces import Discrete, Box
 from copy import copy
-import time
 
 from pettingzoo import ParallelEnv
 
 # Avoid infinite games due to constant switching
-MAX_CONSECUTIVE_SWITCHES = 4
 MAX_CONSECUTIVE_ZERO_DMG_DEALT = 4
 SMALL_DAMAGE_THRESHOLD = 1e-4
 
@@ -256,7 +254,6 @@ class SimplePkmEnv(ParallelEnv):
         """
         self.agents = copy(self.possible_agents)
         self.num_moves = 0
-        self.consecutive_switches = 0
         self.consecutive_no_damage = 0
 
         if self.setting == SETTING_RANDOM:
@@ -357,27 +354,22 @@ class SimplePkmEnv(ParallelEnv):
         dmg_dealt2 = 0
 
         if action1 != SWITCH_ACTION:
-            r[self.agents[self.first]], terminal, can_player2_attack, dmg_dealt1 = self._battle_pkm(action1, self.first)
+            terminal, can_player2_attack, dmg_dealt1 = self._battle_pkm(action1, self.first)
 
         if can_player2_attack and action2 != SWITCH_ACTION:
-            r[self.agents[self.second]], terminal, _, dmg_dealt2 = self._battle_pkm(action2, self.second)
+            terminal, _, dmg_dealt2 = self._battle_pkm(action2, self.second)
         elif self.debug:
             self.debug_message[self.second] = 'can\'t perform any action'
-
-        r[self.agents[self.first]] -= dmg_dealt2 / HIT_POINTS
-        r[self.agents[self.second]] -= dmg_dealt1 / HIT_POINTS        
 
         if dmg_dealt1 + dmg_dealt2 - SMALL_DAMAGE_THRESHOLD <= 0:
             self.consecutive_no_damage += 1
         else:
             self.consecutive_no_damage = 0
-        if self.switched[0] and self.switched[1]:
-            self.consecutive_switches +=1
-        else:
-            self.consecutive_switches = 0
+
+        truncated = self.consecutive_no_damage >= MAX_CONSECUTIVE_ZERO_DMG_DEALT
 
         terminations = { agent: terminal for agent in self.agents }
-        truncations = { agent: self.consecutive_switches >= MAX_CONSECUTIVE_SWITCHES or self.consecutive_no_damage >= MAX_CONSECUTIVE_ZERO_DMG_DEALT for agent in self.agents }
+        truncations = { agent: truncated for agent in self.agents }
 
         observations = {
             agent: np.array(encode(self._state_trainer(i)))
@@ -388,8 +380,13 @@ class SimplePkmEnv(ParallelEnv):
 
         if terminal:
             first_won = SimplePkmEnv._fainted_pkm(self.a_pkm[self.first])
-            r[self.agents[self.first]] = 1 if first_won else 0
-            r[self.agents[self.second]] = 0 if first_won else 1
+            r[self.agents[self.first]] = 1 if first_won else -1
+            r[self.agents[self.second]] = -1 if first_won else 1
+            self.agents = []
+
+        if truncated:
+            r[self.agents[self.first]] = -1
+            r[self.agents[self.second]] = -1
             self.agents = []
 
         return observations, r, terminations, truncations, infos
@@ -452,10 +449,8 @@ class SimplePkmEnv(ParallelEnv):
         terminal = False
         next_player_can_attack = True
         damage_dealt = self._attack_pkm(t_id, a)
-        reward = damage_dealt / HIT_POINTS
         if self._fainted_pkm(self.a_pkm[opponent]):
             self.has_fainted = True
-            reward += 1.
             next_player_can_attack = False
             if self._fainted_pkm(self.p_pkm[opponent]):
                 terminal = True
@@ -463,7 +458,7 @@ class SimplePkmEnv(ParallelEnv):
                 self._switch_pkm(opponent)
                 if self.debug:
                     self.debug_message[opponent] += " FAINTED"
-        return reward, terminal, next_player_can_attack, damage_dealt
+        return terminal, next_player_can_attack, damage_dealt
     
     @staticmethod
     def _fainted_pkm(pkm):
