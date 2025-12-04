@@ -4,9 +4,9 @@ from Environment.PettingZooEnv import SelfPlayWrapper
 import os
 
 class DQNTrainer(SB3Trainer):
-    def __init__(self):
-        super().__init__('DQN')
-        if os.path.isfile(self.model_path+'.zip'):
+    def __init__(self, model_name='DQN', model_folder=None):
+        super().__init__(model_name, model_folder)
+        if os.path.isfile(self.model_path):
             self.model = DQN.load(self.model_path)
         else:
             self.model = self.get_default_model()
@@ -25,3 +25,8 @@ class DQNTrainer(SB3Trainer):
             exploration_final_eps=0.05,
             verbose=1,
         )
+    
+if __name__ == "__main__":
+    trainer = DQNTrainer()
+    trainer.train()
+    trainer.evaluate(50)
